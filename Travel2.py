@@ -5,8 +5,6 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from sentence_transformers import SentenceTransformer
-#from langchain_community.vectorstores import Pinecone as PineconeVectorStore
-# from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
 from langchain.vectorstores import Pinecone as LC_Pinecone
 from langchain.chat_models import ChatOpenAI
@@ -24,7 +22,6 @@ import streamlit as st
 import uuid
 import json
 
-# ------------------ ENV ------------------
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
@@ -40,7 +37,7 @@ myLlmAt0 = ChatOpenAI(
     model="gpt-4o", 
     temperature=0,
     streaming=True,
-    callbacks=[tracer]  # connect LangSmith tracing
+    callbacks=[tracer]  
 )
 # ------------------ FUNÇÕES ------------------
 
@@ -49,12 +46,10 @@ def load_cache():
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # Verifica se tem as chaves esperadas
                 if "videos" in data and "sites" in data:
                     return data
         except (json.JSONDecodeError, ValueError):
-            pass  # arquivo vazio ou inválido
-    # Se arquivo não existe ou está inválido, retorna cache vazio
+            pass 
     return {"videos": [], "sites": []}
 
 def save_cache(cache):
@@ -75,25 +70,23 @@ def prepare_documents(vtt_folder, sites):
     """Lê VTT e sites, retorna dataframe sem reprocessar já processados"""
     cache = load_cache()
     
-    # ---------- Vídeos ----------
     vtt_files = glob.glob(os.path.join(vtt_folder, "*.vtt"))
     video_data = []
     for file in vtt_files:
         title = os.path.splitext(os.path.basename(file))[0]
         if title in cache["videos"]:
-            continue  # já processado
+            continue  
         content = parse_vtt(file)
         video_data.append({"title": title, "content": content, "source": "YouTube"})
-        cache["videos"].append(title)  # adiciona ao cache
+        cache["videos"].append(title)
 
     df_videos = pd.DataFrame(video_data)
     print(f"{len(df_videos)} vídeos novos processados.")
 
-    # ---------- Sites ----------
     site_data = []
     for url in sites:
         if url in cache["sites"]:
-            continue  # já processado
+            continue 
         r = requests.get(url)
         soup = BeautifulSoup(r.text, "html.parser")
         paragraphs = soup.find_all("p")
@@ -101,25 +94,21 @@ def prepare_documents(vtt_folder, sites):
         title_tag = soup.find("title")
         title = title_tag.get_text() if title_tag else url
         site_data.append({"title": title, "content": content, "source": url})
-        cache["sites"].append(url)  # adiciona ao cache
+        cache["sites"].append(url) 
 
     df_sites = pd.DataFrame(site_data)
     print(f"{len(df_sites)} sites novos processados.")
 
-    # ---------- Concatenar ----------
     df_all = pd.concat([df_videos, df_sites], ignore_index=True)
 
-    # Se df_all estiver vazio, cria colunas padrão para evitar erros
     if df_all.empty:
         df_all = pd.DataFrame(columns=["title", "content", "source"])
     else:
-        # Garante que a coluna "content" existe e preenche NaN
         if "content" not in df_all.columns:
             df_all["content"] = ""
         else:
             df_all["content"] = df_all["content"].fillna("")
 
-    # Salvar cache atualizado
     save_cache(cache)
 
     return df_all
@@ -130,7 +119,6 @@ def prepare_vectorstore(df_all, model_name="paraphrase-multilingual-MiniLM-L12-v
     embeddings = embedder.encode(df_all["content"].tolist(), show_progress_bar=True, convert_to_numpy=True)
     df_all["embedding"] = list(embeddings)
 
-    # Pinecone
     pc = Pinecone(api_key=PINECONE_API_KEY)
     if INDEX_NAME not in pc.list_indexes().names():
         pc.create_index(
@@ -151,7 +139,6 @@ def prepare_vectorstore(df_all, model_name="paraphrase-multilingual-MiniLM-L12-v
         }
         to_upsert.append((vec_id, embedding, metadata))
         
-    # Supondo que 'to_upsert' é a lista de vetores pronta para enviar
     if len(to_upsert) == 0:
         print("Nenhum vetor novo para upsert. Pulando envio para Pinecone.")
     else:
@@ -159,7 +146,6 @@ def prepare_vectorstore(df_all, model_name="paraphrase-multilingual-MiniLM-L12-v
         
     print(f"{len(to_upsert)} embeddings inseridos no Pinecone!")
 
-    # LangChain retrievers
     llm_embeddings = SentenceTransformerEmbeddings(model_name=model_name)
     vectorstore = LC_Pinecone.from_existing_index(
         index_name=INDEX_NAME,
@@ -186,7 +172,7 @@ Tu és um especialista em viagens com crianças.
 Recebeste esta pergunta do utilizador: "{pergunta}"
 
 Divide-a em sub-queries úteis e específicas que ajudem a procurar respostas nos documentos.
-Cria apenas as sub-queries relevantes para a pergunta, usa diferentes termos para maximizar as chances de encontrar uma resposta relevante, não acrescenta categorias extra.
+Cria apenas as sub-queries relevantes para a pergunta, usa diferentes termos para maximizar as chances de encontrar uma resposta relevante, não acrescentes categorias extra.
 
 Retorna cada sub-query numerada e clara.
 """
@@ -226,16 +212,16 @@ A tua tarefa é:
 3. Indicar o que deve ser preparado/levado para a viagem.
 4. Indicar o que pode ser alugado na cidade e onde.
 5. Listar restaurantes ou locais adaptados a famílias.
-6. Reinforce items de primeira necessidade que sao comuns (por exepmplo, levar protetor solar no verao e nao ir na praia no inverno). 
+6. Reforça items de primeira necessidade que sao comuns (por exemplo, levar protetor solar no verao). 
 
 Regras importantes:
 - Usa sempre as ferramentas para obter informação.
 - Resume e organiza os resultados de forma clara e prática.
-- Se não encontrares resultados relevantes, diz claramente que não há informação na base de dados. Complemente a informaçao com senso comum. 
-- Usa perguntas para confirmar que o usario tem os items necessarios e continue o planejamento da viagem. 
-- usa optimizacoes especificas para o motor de pequisa duckduck go (escreva perguntas em ingles, use palavras chave). leia a resposta com atencao e adapte o seu proximo passo.
-- sempre cheque sua propria base de dados antes de fazer uma pesquisa
-- sempre responda em portugues
+- Se não encontrares resultados relevantes, diz claramente que não há informação na base de dados. Complementa a informação com senso comum. 
+- Usa perguntas para confirmar que o usuário tem os items necessarios e continue o planeamento da viagem. 
+- usa optimizações especificas para o motor de pequisa duckduck go (escreve perguntas em inglês, usa palavras chave). Lê a resposta com atencao e adapta o teu próximo passo.
+- Verifica sempre a tua propria base de dados antes de fazer uma pesquisa
+- Responde semore em português
 
 follow the format                                                
 
